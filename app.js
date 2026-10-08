@@ -3,6 +3,12 @@
  * Uses Store (data) and the render functions from ui.js.
  */
 
+ // Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
 const PUBLIC_PAGES = ['home', 'borrow', 'login'];
 const ADMIN_PAGES = ['dashboard', 'a-pending', 'a-approved', 'a-rejected', 'a-returned', 'a-lost', 'a-inventory', 'a-reports'];
 
@@ -377,22 +383,6 @@ function resetData() {
   });
 }
 
-// ─── INIT ──────────────────────────────────────────────────────
-$('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
-$('login-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
-$('year').textContent = new Date().getFullYear();
-
-refreshAll();
-setDateLimits();
-if (hasAcceptedTerms()) $('terms-overlay').classList.add('hidden'); else showTerms();
-
- // Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
 // Your web app's Firebase configuration
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
@@ -409,3 +399,15 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
+
+
+// ─── INIT ──────────────────────────────────────────────────────
+$('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+$('login-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('year').textContent = new Date().getFullYear();
+
+refreshAll();
+setDateLimits();
+if (hasAcceptedTerms()) $('terms-overlay').classList.add('hidden'); else showTerms();
+
