@@ -1,136 +1,158 @@
 /**
- * store.js — data layer.
- * All reads/writes go through the Store object, so when you add a real
- * database later you only need to change this file (see README.md).
+ * store.js — data layer backed by Firebase Realtime Database + Auth.
+ * Exposes the same Store API the UI uses, and sets window.Store so ui.js
+ * (a classic script) can read it.
  */
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, onValue, set, update, remove, get } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
-const Store = (() => {
-  const KEY = 'ebms.camptinio.v1';
+const firebaseConfig = {
+  apiKey: "AIzaSyCUJJRxAYfMZPNel5vcGlNUGVassrgXuXY",
+  authDomain: "barangayborrowingsystem-82048.firebaseapp.com",
+  databaseURL: "https://barangayborrowingsystem-82048-default-rtdb.firebaseio.com",
+  projectId: "barangayborrowingsystem-82048",
+  storageBucket: "barangayborrowingsystem-82048.firebasestorage.app",
+  messagingSenderId: "41992388816",
+  appId: "1:41992388816:web:9847dc4de4886876d61ed5"
+};
 
-  // Admin login. NOTE: this runs in the browser, so it only keeps casual visitors out.
-  // Real security needs a server/database (see README). Change these before use.
-  const ADMIN = { username: 'Camptinio@gmail.com', password: 'camptinio2026' };
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+const auth = getAuth(app);
 
-  const STATUS = {
-    PENDING: 'Pending',
-    APPROVED: 'Approved',
-    RETURNED: 'Returned',
-    LOST: 'Lost/Damaged',
-    REJECTED: 'Rejected',
-  };
+const STATUS = {
+  PENDING: 'Pending',
+  APPROVED: 'Approved',
+  RETURNED: 'Returned',
+  LOST: 'Lost/Damaged',
+  REJECTED: 'Rejected',
+};
 
-  function seed() {
-    return {
-      counter: 103,
-      requests: [
-        { id: 'REQ-102', name: 'Juan Dela Cruz', contact: '09171234567', item: 'Monoblock Chairs', qty: 20, purpose: 'Birthday party', dateNeeded: '2026-06-15', returnDate: '2026-06-16', idNum: 'VID-001', status: STATUS.APPROVED },
-        { id: 'REQ-101', name: 'Maria Santos', contact: '09281234567', item: 'Collapsible Tents', qty: 2, purpose: 'Community event', dateNeeded: '2026-05-20', returnDate: '2026-05-21', idNum: 'VID-002', status: STATUS.APPROVED },
-        { id: 'REQ-100', name: 'Maria De Cruz', contact: '09391234567', item: 'Monoblock Chairs', qty: 15, purpose: 'Graduation celebration', dateNeeded: '2026-05-10', returnDate: '2026-05-11', idNum: 'VID-003', status: STATUS.RETURNED },
-        { id: 'REQ-99', name: 'Pedro Reyes', contact: '09501234567', item: 'Wooden Tables', qty: 3, purpose: 'Fiesta', dateNeeded: '2026-05-05', returnDate: '2026-05-06', idNum: 'VID-004', status: STATUS.PENDING },
-        { id: 'REQ-98', name: 'Ana Garcia', contact: '09611234567', item: 'Monoblock Chairs', qty: 10, purpose: 'Wedding', dateNeeded: '2026-04-20', returnDate: '2026-04-21', idNum: 'VID-005', status: STATUS.PENDING },
-        { id: 'REQ-97', name: 'Carlos Bautista', contact: '09721234567', item: 'Collapsible Tents', qty: 1, purpose: 'Company outing', dateNeeded: '2026-04-10', returnDate: '2026-04-11', idNum: 'VID-006', status: STATUS.LOST },
-        { id: 'REQ-96', name: 'Maria De Cruz', contact: '09391234567', item: 'Monoblock Chairs', qty: 8, purpose: 'Community meeting', dateNeeded: '2026-05-10', returnDate: '2026-05-11', idNum: 'VID-003', status: STATUS.PENDING },
-      ],
-      // "lost" = quantity currently lost/damaged. "in use" is computed from Approved requests.
-      items: [
-        { name: 'Monoblock Chairs', icon: '🪑', total: 100, lost: 4 },
-        { name: 'Collapsible Tents', icon: '⛺', total: 10, lost: 2 },
-        { name: 'Wooden Tables', icon: '🪵', total: 5, lost: 1 },
-      ],
-    };
-  }
+const DEFAULT_ITEMS = [
+  { name: 'Monoblock Chairs', icon: '🪑', total: 100, lost: 4 },
+  { name: 'Collapsible Tents', icon: '⛺', total: 10, lost: 2 },
+  { name: 'Wooden Tables', icon: '🪵', total: 5, lost: 1 },
+];
 
-  function isValid(s) {
-    return s && Array.isArray(s.requests) && Array.isArray(s.items) && typeof s.counter === 'number';
-  }
+let items = [];      // live cache (public can read)
+let requests = [];   // live cache (admin only)
+const listeners = [];
+const notify = () => listeners.forEach((fn) => { try { fn(); } catch (e) { console.error(e); } });
 
-  function load() {
+// Firebase keys can't contain . $ # [ ] /
+const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || ('item_' + Date.now());
+
+function seedItems() {
+  const obj = {};
+  DEFAULT_ITEMS.forEach((it, i) => { obj[slug(it.name)] = { ...it, inUse: 0, order: i }; });
+  return set(ref(db, 'items'), obj);
+}
+
+// Keep each item's "inUse" number up to date so the public page can show
+// availability without being allowed to read the requests.
+async function syncInUse(name) {
+  const it = items.find((i) => i.name === name);
+  if (!it) return;
+  const n = requests
+    .filter((r) => r.item === name && r.status === STATUS.APPROVED)
+    .reduce((sum, r) => sum + r.qty, 0);
+  if (n !== it.inUse) await update(ref(db, 'items/' + it.key), { inUse: n });
+}
+
+// ── Items: everyone can read ──
+onValue(ref(db, 'items'), (snap) => {
+  const val = snap.val() || {};
+  items = Object.entries(val)
+    .map(([key, v]) => ({ key, icon: '📦', inUse: 0, lost: 0, ...v }))
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+  notify();
+}, (err) => console.error('Items listener:', err));
+
+// ── Requests: only while an admin is signed in ──
+let unsubRequests = null;
+onAuthStateChanged(auth, async (user) => {
+  if (unsubRequests) { unsubRequests(); unsubRequests = null; }
+  requests = [];
+  if (user) {
+    unsubRequests = onValue(ref(db, 'requests'), (snap) => {
+      requests = Object.values(snap.val() || {})
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      notify();
+    }, (err) => console.error('Requests listener:', err));
     try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (isValid(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.warn('Could not read saved data, using defaults.', e);
-    }
-    return seed();
+      const s = await get(ref(db, 'items'));
+      if (!s.exists()) await seedItems();   // first run: create sample items
+    } catch (e) { console.error(e); }
   }
+  notify();
+});
 
-  let state = load();
+export const Store = {
+  STATUS,
+  onChange: (fn) => listeners.push(fn),
 
-  function save() {
+  // ── requests ──
+  getRequests: () => requests,
+  getRequest: (id) => requests.find((r) => r.id === id),
+
+  async addRequest(data) {
+    const id = 'REQ-' + Date.now().toString(36).toUpperCase();
+    const req = { id, ...data, status: STATUS.PENDING, createdAt: new Date().toISOString() };
     try {
-      localStorage.setItem(KEY, JSON.stringify(state));
-      return true;
-    } catch (e) {
-      console.warn('Could not save data.', e);
-      return false;
-    }
-  }
-
-  return {
-    STATUS,
-
-    // ── requests ──
-    getRequests: () => state.requests,
-    getRequest: (id) => state.requests.find((r) => r.id === id),
-    findRequest(query) {
-      const q = String(query).trim().toLowerCase();
-      return state.requests.find((r) => r.id.toLowerCase() === q || r.name.toLowerCase() === q);
-    },
-    addRequest(data) {
-      const req = { id: 'REQ-' + state.counter++, ...data, status: STATUS.PENDING };
-      state.requests.unshift(req);
-      if (!save()) {
-        state.requests.shift();
-        state.counter--;
-        return null; // storage full
-      }
+      await set(ref(db, 'requests/' + id), req);
       return req;
-    },
-    setStatus(id, status, extra = {}) {
-      const r = state.requests.find((x) => x.id === id);
-      if (!r) return null;
-      r.status = status;
-      Object.assign(r, extra);
-      save();
-      return r;
-    },
+    } catch (e) {
+      console.error('addRequest failed:', e);
+      return null;
+    }
+  },
 
-    // ── items ──
-    getItems: () => state.items,
-    getItem: (name) => state.items.find((i) => i.name === name),
-    addItem(name, total) {
-      state.items.push({ name, icon: '📦', total, lost: 0 });
-      save();
-    },
-    updateItem(index, { total, lost }) {
-      const it = state.items[index];
-      if (!it) return;
-      it.total = total;
-      it.lost = lost;
-      save();
-    },
+  async setStatus(id, status, extra = {}) {
+    const r = requests.find((x) => x.id === id);
+    if (!r) return null;
+    await update(ref(db, 'requests/' + id), { status, ...extra });
+    r.status = status;
+    Object.assign(r, extra);
+    await syncInUse(r.item);
+    return r;
+  },
 
-    // ── computed inventory ──
-    inUse(name) {
-      return state.requests
-        .filter((r) => r.status === STATUS.APPROVED && r.item === name)
-        .reduce((sum, r) => sum + r.qty, 0);
-    },
-    available(item) {
-      return Math.max(0, item.total - item.lost - this.inUse(item.name));
-    },
+  // ── items ──
+  getItems: () => items,
+  getItem: (name) => items.find((i) => i.name === name),
 
-    // ── admin login ──
-    checkLogin: (user, pass) => user === ADMIN.username && pass === ADMIN.password,
+  addItem(name, total) {
+    return set(ref(db, 'items/' + slug(name)), { name, icon: '📦', total, lost: 0, inUse: 0, order: Date.now() });
+  },
+  updateItem(index, { total, lost }) {
+    const it = items[index];
+    if (!it) return Promise.resolve();
+    return update(ref(db, 'items/' + it.key), { total, lost });
+  },
 
-    // ── maintenance ──
-    reset() {
-      state = seed();
-      save();
-    },
-  };
-})();
+  // ── computed inventory ──
+  inUse(name) {
+    const it = items.find((i) => i.name === name);
+    return it ? (it.inUse || 0) : 0;
+  },
+  available(item) {
+    return item ? Math.max(0, item.total - item.lost - (item.inUse || 0)) : 0;
+  },
 
+  // ── admin auth (Firebase Authentication) ──
+  async login(email, password) {
+    try { await signInWithEmailAndPassword(auth, email, password); return true; }
+    catch (e) { console.warn('Login failed:', e.code); return false; }
+  },
+  logout: () => signOut(auth),
+  isAdmin: () => !!auth.currentUser,
+
+  // ── maintenance ──
+  async reset() {
+    await remove(ref(db, 'requests'));
+    await seedItems();
+  },
+};
+
+window.Store = Store;   // so ui.js can use it
