@@ -1,34 +1,14 @@
 /**
- * store.js — data layer (Firebase Realtime Database).
- *
- * Same public API as before, so the rest of the app keeps working.
- * Reads are synchronous (from a live local cache); writes go to Firebase.
- * Firebase pushes changes to every open browser in real time.
- *
- * REQUIRED in your HTML, BEFORE store.js:
- *   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
- *   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
- *   <script src="store.js"></script>
- *
- * In your page code, wait for data before the first render:
- *   Store.ready.then(render);
- *   Store.onChange(render);   // re-render whenever data changes (any device)
+ * store.js — data layer.
+ * All reads/writes go through the Store object, so when you add a real
+ * database later you only need to change this file (see README.md).
  */
 
-const firebaseConfig = {
-  apiKey: "AIzaSyCUJJRxAYfMZPNel5vcGlNUGVassrgXuXY",
-  authDomain: "barangayborrowingsystem-82048.firebaseapp.com",
-  databaseURL: "https://barangayborrowingsystem-82048-default-rtdb.firebaseio.com",
-  projectId: "barangayborrowingsystem-82048",
-  storageBucket: "barangayborrowingsystem-82048.firebasestorage.app",
-  messagingSenderId: "41992388816",
-  appId: "1:41992388816:web:9847dc4de4886876d61ed5",
-  measurementId: "G-2YFR9CMZJK"
-};
-
 const Store = (() => {
+  const KEY = 'ebms.camptinio.v1';
+
   // Admin login. NOTE: this runs in the browser, so it only keeps casual visitors out.
-  // Real security needs Firebase Authentication + database rules. Change these before use.
+  // Real security needs a server/database (see README). Change these before use.
   const ADMIN = { username: 'admin', password: 'camptinio2024' };
 
   const STATUS = {
@@ -38,10 +18,6 @@ const Store = (() => {
     LOST: 'Lost/Damaged',
     REJECTED: 'Rejected',
   };
-
-  // ── Firebase setup ──
-  firebase.initializeApp(firebaseConfig);
-  const root = firebase.database().ref('ebms-camptinio');
 
   function seed() {
     return {
@@ -64,61 +40,37 @@ const Store = (() => {
     };
   }
 
-  // ── conversion helpers (Firebase stores keyed objects, the app uses arrays) ──
-  const clean = (obj) => JSON.parse(JSON.stringify(obj)); // Firebase rejects `undefined`
-  const reqNum = (id) => parseInt(String(id).replace(/\D/g, ''), 10) || 0;
-
-  function toDb(s) {
-    const requests = {};
-    s.requests.forEach((r) => { requests[r.id] = clean(r); });
-    const items = {};
-    s.items.forEach((it, i) => { items[i] = clean(it); });
-    return { counter: s.counter, requests, items };
+  function isValid(s) {
+    return s && Array.isArray(s.requests) && Array.isArray(s.items) && typeof s.counter === 'number';
   }
 
-  function fromDb(v) {
-    const requests = Object.values(v.requests || {}).sort((a, b) => reqNum(b.id) - reqNum(a.id)); // newest first
-    const itemsObj = v.items || {};
-    const items = Object.keys(itemsObj)
-      .sort((a, b) => Number(a) - Number(b))
-      .map((k) => itemsObj[k]);
-    return { counter: typeof v.counter === 'number' ? v.counter : 1, requests, items };
-  }
-
-  // ── state + change notifications ──
-  let state = { counter: 1, requests: [], items: [] };
-  const listeners = [];
-  const notify = () => listeners.forEach((fn) => { try { fn(); } catch (e) { console.error(e); } });
-
-  const fail = (what) => (err) => console.error(`Firebase: could not ${what}.`, err);
-
-  // Resolves after the first data load (or after a failure, using defaults).
-  const ready = new Promise((resolve) => {
-    let first = true;
-    root.on(
-      'value',
-      (snap) => {
-        const v = snap.val();
-        if (!v) {
-          // Empty database → upload starter data once. The listener fires again afterwards.
-          root.set(toDb(seed())).catch(fail('seed database'));
-          return;
-        }
-        state = fromDb(v);
-        if (first) { first = false; resolve(); }
-        notify();
-      },
-      (err) => {
-        console.error('Firebase: could not read data (check database rules / network).', err);
-        if (first) { first = false; state = seed(); resolve(); notify(); }
+  function load() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (isValid(parsed)) return parsed;
       }
-    );
-  });
+    } catch (e) {
+      console.warn('Could not read saved data, using defaults.', e);
+    }
+    return seed();
+  }
+
+  let state = load();
+
+  function save() {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(state));
+      return true;
+    } catch (e) {
+      console.warn('Could not save data.', e);
+      return false;
+    }
+  }
 
   return {
     STATUS,
-    ready,
-    onChange: (fn) => { listeners.push(fn); },
 
     // ── requests ──
     getRequests: () => state.requests,
@@ -128,16 +80,13 @@ const Store = (() => {
       return state.requests.find((r) => r.id.toLowerCase() === q || r.name.toLowerCase() === q);
     },
     addRequest(data) {
-      const req = clean({ id: 'REQ-' + state.counter++, ...data, status: STATUS.PENDING });
-      state.requests.unshift(req); // optimistic local update
-      root
-        .update({ ['requests/' + req.id]: req, counter: state.counter })
-        .catch((e) => {
-          fail('save request')(e);
-          state.requests = state.requests.filter((r) => r.id !== req.id);
-          state.counter--;
-          notify();
-        });
+      const req = { id: 'REQ-' + state.counter++, ...data, status: STATUS.PENDING };
+      state.requests.unshift(req);
+      if (!save()) {
+        state.requests.shift();
+        state.counter--;
+        return null; // storage full
+      }
       return req;
     },
     setStatus(id, status, extra = {}) {
@@ -145,7 +94,7 @@ const Store = (() => {
       if (!r) return null;
       r.status = status;
       Object.assign(r, extra);
-      root.child('requests/' + id).update(clean({ status, ...extra })).catch(fail('update status'));
+      save();
       return r;
     },
 
@@ -153,17 +102,15 @@ const Store = (() => {
     getItems: () => state.items,
     getItem: (name) => state.items.find((i) => i.name === name),
     addItem(name, total) {
-      const item = { name, icon: '📦', total, lost: 0 };
-      const index = state.items.length;
-      state.items.push(item);
-      root.child('items/' + index).set(item).catch(fail('add item'));
+      state.items.push({ name, icon: '📦', total, lost: 0 });
+      save();
     },
     updateItem(index, { total, lost }) {
       const it = state.items[index];
       if (!it) return;
       it.total = total;
       it.lost = lost;
-      root.child('items/' + index).update({ total, lost }).catch(fail('update item'));
+      save();
     },
 
     // ── computed inventory ──
@@ -182,8 +129,8 @@ const Store = (() => {
     // ── maintenance ──
     reset() {
       state = seed();
-      root.set(toDb(state)).catch(fail('reset data'));
-      notify();
+      save();
     },
   };
 })();
+
