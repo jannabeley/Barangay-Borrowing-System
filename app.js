@@ -81,17 +81,21 @@ const ADMIN_PAGES = ['dashboard', 'a-pending', 'a-approved', 'a-rejected', 'a-re
 
 // ─── TERMS & CONDITIONS ────────────────────────────────────────
 let termsOk = false; // fallback if sessionStorage is unavailable
+
 function hasAcceptedTerms() {
   try { return sessionStorage.getItem('ebms.terms') === '1' || termsOk; } catch (e) { return termsOk; }
 }
+
 function showTerms() {
   $('terms-check').checked = false;
   $('terms-continue').disabled = true;
   $('terms-overlay').classList.remove('hidden');
 }
+
 function onTermsToggle() {
   $('terms-continue').disabled = !$('terms-check').checked;
 }
+
 function acceptTerms() {
   if (!$('terms-check').checked) return;
   termsOk = true;
@@ -99,6 +103,9 @@ function acceptTerms() {
   $('terms-overlay').classList.add('hidden');
 }
 
+// Wire up the controls here so it works even when app.js is a module
+$('terms-check').addEventListener('change', onTermsToggle);
+$('terms-continue').addEventListener('click', acceptTerms);
 // ─── NAVIGATION ────────────────────────────────────────────────
 function activatePage(id, navId) {
   [...PUBLIC_PAGES, ...ADMIN_PAGES].forEach((p) => $('page-' + p).classList.remove('active'));
