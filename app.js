@@ -1,83 +1,12 @@
 /**
  * app.js — navigation, user actions, and startup.
- * Uses Store (data) and the render functions from ui.js.
+ * Loaded as a module. Uses Store (store.js) and the globals from ui.js
+ * ($, showToast, openModal, closeModal, refreshAll, render*, stockStatus...).
  */
-
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getDatabase, ref, onValue, set, update, remove } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
-
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
-const firebaseConfig = {
-  apiKey: "AIzaSyCUJJRxAYfMZPNel5vcGlNUGVassrgXuXY",
-  authDomain: "barangayborrowingsystem-82048.firebaseapp.com",
-  databaseURL: "https://barangayborrowingsystem-82048-default-rtdb.firebaseio.com",
-  projectId: "barangayborrowingsystem-82048",
-  storageBucket: "barangayborrowingsystem-82048.firebasestorage.app",
-  messagingSenderId: "41992388816",
-  appId: "1:41992388816:web:9847dc4de4886876d61ed5",
-  measurementId: "G-2YFR9CMZJK"
-};
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-
-const Store = (() => {
-  const STATUS = { PENDING:'Pending', APPROVED:'Approved', REJECTED:'Rejected', RETURNED:'Returned', LOST:'Lost' };
-  let items = [];      // cache
-  let requests = [];   // cache
-
-  // Live sync: runs on first load AND whenever any device changes data
-  onValue(ref(db, 'items'), (snap) => {
-    items = Object.values(snap.val() || {});
-    refreshAdminView?.(); refreshAll();
-  });
-  onValue(ref(db, 'requests'), (snap) => {
-    requests = Object.values(snap.val() || {});
-    refreshAll();
-  });
-
-  const inUse = (name) => requests
-    .filter(r => r.item === name && r.status === STATUS.APPROVED)
-    .reduce((n, r) => n + r.qty, 0);
-
-  return {
-    STATUS,
-    getItems: () => items,
-    getItem: (name) => items.find(i => i.name === name),
-    getRequest: (id) => requests.find(r => r.id === id),
-    inUse,
-    available: (it) => it ? it.total - it.lost - inUse(it.name) : 0,
-
-    addRequest(data) {
-      const id = 'REQ-' + Date.now().toString(36).toUpperCase();
-      const req = { id, status: STATUS.PENDING, createdAt: new Date().toISOString(), ...data };
-      set(ref(db, 'requests/' + id), req);
-      requests.push(req);               // show instantly
-      return req;
-    },
-    setStatus(id, status, extra = {}) {
-      update(ref(db, 'requests/' + id), { status, ...extra });
-    },
-    addItem(name, total) {
-      set(ref(db, 'items/' + encodeURIComponent(name)), { name, total, lost: 0 });
-    },
-    updateItem(index, changes) {
-      const it = items[index];
-      update(ref(db, 'items/' + encodeURIComponent(it.name)), changes);
-    },
-    reset() { /* remove(ref(db,'requests')) and re-seed items if you want */ },
-    checkLogin: (u, p) => /* see note below */ false,
-  };
-})();
-
-const analytics = getAnalytics(app);
+import { Store } from './store.js';
 
 const PUBLIC_PAGES = ['home', 'borrow', 'login'];
 const ADMIN_PAGES = ['dashboard', 'a-pending', 'a-approved', 'a-rejected', 'a-returned', 'a-lost', 'a-inventory', 'a-reports'];
-
 
 // ─── TERMS & CONDITIONS ────────────────────────────────────────
 let termsOk = false; // fallback if sessionStorage is unavailable
@@ -85,17 +14,14 @@ let termsOk = false; // fallback if sessionStorage is unavailable
 function hasAcceptedTerms() {
   try { return sessionStorage.getItem('ebms.terms') === '1' || termsOk; } catch (e) { return termsOk; }
 }
-
 function showTerms() {
   $('terms-check').checked = false;
   $('terms-continue').disabled = true;
   $('terms-overlay').classList.remove('hidden');
 }
-
 function onTermsToggle() {
   $('terms-continue').disabled = !$('terms-check').checked;
 }
-
 function acceptTerms() {
   if (!$('terms-check').checked) return;
   termsOk = true;
@@ -103,9 +29,6 @@ function acceptTerms() {
   $('terms-overlay').classList.add('hidden');
 }
 
-// Wire up the controls here so it works even when app.js is a module
-$('terms-check').addEventListener('change', onTermsToggle);
-$('terms-continue').addEventListener('click', acceptTerms);
 // ─── NAVIGATION ────────────────────────────────────────────────
 function activatePage(id, navId) {
   [...PUBLIC_PAGES, ...ADMIN_PAGES].forEach((p) => $('page-' + p).classList.remove('active'));
@@ -123,7 +46,7 @@ function showPage(id) {
 }
 
 function showAdminPage(id) {
-  if (!isLoggedIn()) { showLogin(); return; }
+  if (!Store.isAdmin()) { showLogin(); return; }
   activatePage(id, 'admin-nav');
   if (id === 'dashboard') renderDashboard();
   else if (REQUEST_TABLES[id]) renderRequestTable(id);
@@ -131,43 +54,38 @@ function showAdminPage(id) {
   else if (id === 'a-reports') renderReports();
 }
 
-// ─── ADMIN LOGIN ───────────────────────────────────────────────
-let loggedIn = false; // fallback if sessionStorage is unavailable
-function isLoggedIn() {
-  try { return sessionStorage.getItem('ebms.admin') === '1' || loggedIn; } catch (e) { return loggedIn; }
-}
-function setLoggedIn(v) {
-  loggedIn = v;
-  try { v ? sessionStorage.setItem('ebms.admin', '1') : sessionStorage.removeItem('ebms.admin'); } catch (e) { /* ignore */ }
-}
+// ─── ADMIN LOGIN (Firebase Auth) ───────────────────────────────
 function showLogin() {
   $('admin-nav').style.display = 'none';
   $('public-nav').style.display = 'flex';
   activatePage('login', 'public-nav');
   $('login-user').focus();
 }
-function doLogin() {
+
+async function doLogin() {
   const user = $('login-user').value.trim();
   const pass = $('login-pass').value;
-  if (!Store.checkLogin(user, pass)) {
-    showToast('❌ Incorrect username or password.');
+  if (!user || !pass) { showToast('⚠️ Enter your email and password.'); return; }
+  const ok = await Store.login(user, pass);
+  if (!ok) {
+    showToast('❌ Incorrect email or password.');
     $('login-pass').value = '';
     return;
   }
-  setLoggedIn(true);
   $('login-user').value = '';
   $('login-pass').value = '';
   showToast('✅ Welcome, Admin!');
   showAdmin();
 }
-function logout() {
-  setLoggedIn(false);
+
+async function logout() {
+  await Store.logout();
   showPublic();
   showToast('👋 Logged out.');
 }
 
 function showAdmin() {
-  if (!isLoggedIn()) { showLogin(); return; }
+  if (!Store.isAdmin()) { showLogin(); return; }
   $('public-nav').style.display = 'none';
   $('admin-nav').style.display = 'flex';
   showAdminPage('dashboard');
@@ -200,7 +118,6 @@ function todayStr() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-// Past dates can't be picked: both fields start at today; return date starts at the date needed
 function setDateLimits() {
   const today = todayStr();
   $('f-date').min = today;
@@ -212,7 +129,6 @@ function syncReturnMin() {
   if ($('f-return').value && $('f-return').value < $('f-return').min) $('f-return').value = '';
 }
 
-// Quantity can't exceed what's available for the selected item
 function updateQtyLimit() {
   const qty = $('f-qty'), hint = $('qty-hint');
   const item = Store.getItem($('f-equipment').value);
@@ -237,6 +153,7 @@ function updateQtyLimit() {
   hint.textContent = `Available: ${s.avail}` + (s.out > 0 ? ` (${s.out} out on loan)` : '');
   if (parseInt(qty.value, 10) > s.avail) qty.value = s.avail;
 }
+
 function clampQty() {
   const qty = $('f-qty');
   const max = parseInt(qty.max, 10);
@@ -245,7 +162,7 @@ function clampQty() {
   else if (v < 1) qty.value = '';
 }
 
-// Read the chosen image, shrink it (max 900px, JPEG) so it fits in browser storage
+// Read the chosen image and shrink it (max 900px, JPEG) so it's small to store
 function handleIdUpload(input) {
   const file = input.files[0];
   const preview = $('f-id-preview');
@@ -277,7 +194,7 @@ function handleIdUpload(input) {
 }
 
 // ─── BORROW FORM ───────────────────────────────────────────────
-function submitRequest() {
+async function submitRequest() {
   if (!hasAcceptedTerms()) { showTerms(); return; }
   const name = $('f-name').value.trim();
   const contact = $('f-contact').value.trim();
@@ -311,8 +228,8 @@ function submitRequest() {
     return;
   }
 
-  const req = Store.addRequest({ name, contact, item, qty, purpose, dateNeeded, returnDate, idImage: pendingIdImage, termsAcceptedAt: new Date().toISOString() });
-  if (!req) { showToast('❌ Storage is full. Please remove old requests or use a smaller ID photo.'); return; }
+  const req = await Store.addRequest({ name, contact, item, qty, purpose, dateNeeded, returnDate, idImage: pendingIdImage, termsAcceptedAt: new Date().toISOString() });
+  if (!req) { showToast('❌ Could not submit. Check your connection and try again.'); return; }
 
   $('req-id-out').textContent = req.id;
   $('borrow-success').classList.add('show');
@@ -337,7 +254,7 @@ function viewDetail(id) {
 }
 
 // ─── ADMIN ACTIONS ─────────────────────────────────────────────
-function approveReq(id) {
+async function approveReq(id) {
   const r = Store.getRequest(id);
   if (!r) return;
   const available = Store.available(Store.getItem(r.item));
@@ -345,7 +262,7 @@ function approveReq(id) {
     showToast(`⚠️ Cannot approve: only ${available} ${r.item} available.`);
     return;
   }
-  Store.setStatus(id, Store.STATUS.APPROVED);
+  await Store.setStatus(id, Store.STATUS.APPROVED);
   showToast('✅ ' + id + ' approved!');
   refreshAdminView();
 }
@@ -359,9 +276,9 @@ function rejectReq(id) {
     formHtml: '<div class="form-group"><label for="reject-reason">Reason (optional)</label><textarea id="reject-reason" placeholder="e.g. Items not available on that date"></textarea></div>',
     confirmText: 'Reject',
     showCancel: true,
-    onConfirm: () => {
+    onConfirm: async () => {
       const reason = $('reject-reason').value.trim();
-      Store.setStatus(id, Store.STATUS.REJECTED, { rejectReason: reason });
+      await Store.setStatus(id, Store.STATUS.REJECTED, { rejectReason: reason });
       closeModal();
       showToast('🚫 ' + id + ' rejected.');
       refreshAdminView();
@@ -369,8 +286,8 @@ function rejectReq(id) {
   });
 }
 
-function markReturned(id) {
-  Store.setStatus(id, Store.STATUS.RETURNED);
+async function markReturned(id) {
+  await Store.setStatus(id, Store.STATUS.RETURNED);
   showToast('📦 ' + id + ' marked as returned.');
   refreshAdminView();
 }
@@ -383,10 +300,10 @@ function markLost(id) {
     body: `Mark ${r.id} (${r.qty} × ${r.item}) as lost or damaged? The items will be counted in the item's Lost/Damaged total.`,
     confirmText: 'Confirm',
     showCancel: true,
-    onConfirm: () => {
-      Store.setStatus(id, Store.STATUS.LOST);
+    onConfirm: async () => {
+      await Store.setStatus(id, Store.STATUS.LOST);
       const it = Store.getItem(r.item);
-      if (it) Store.updateItem(Store.getItems().indexOf(it), { total: it.total, lost: it.lost + r.qty });
+      if (it) await Store.updateItem(Store.getItems().indexOf(it), { total: it.total, lost: it.lost + r.qty });
       closeModal();
       showToast('⚠️ ' + id + ' marked as lost/damaged.');
       refreshAdminView();
@@ -404,7 +321,7 @@ function editItem(i) {
       <div class="form-group"><label for="edit-lost">Lost/Damaged</label><input type="number" id="edit-lost" value="${it.lost}" min="0"></div>`,
     confirmText: 'Save Changes',
     showCancel: true,
-    onConfirm: () => {
+    onConfirm: async () => {
       const total = parseInt($('edit-total').value, 10);
       const lost = parseInt($('edit-lost').value, 10);
       if (Number.isNaN(total) || Number.isNaN(lost) || total < 0 || lost < 0) {
@@ -412,7 +329,7 @@ function editItem(i) {
         return;
       }
       if (lost > total) { showToast('⚠️ Lost/Damaged cannot exceed total.'); return; }
-      Store.updateItem(i, { total, lost });
+      await Store.updateItem(i, { total, lost });
       closeModal();
       showToast('✅ Item updated!');
       refreshAdminView();
@@ -429,12 +346,12 @@ function showAddItem() {
       <div class="form-group"><label for="add-total">Total Quantity</label><input type="number" id="add-total" placeholder="0" min="0"></div>`,
     confirmText: 'Add Item',
     showCancel: true,
-    onConfirm: () => {
+    onConfirm: async () => {
       const name = $('add-name').value.trim();
       const total = parseInt($('add-total').value, 10) || 0;
       if (!name) { showToast('⚠️ Please enter item name.'); return; }
       if (Store.getItem(name)) { showToast('⚠️ That item already exists.'); return; }
-      Store.addItem(name, total);
+      await Store.addItem(name, total);
       closeModal();
       showToast('✅ Item added: ' + name);
       refreshAdminView();
@@ -448,8 +365,8 @@ function resetData() {
     body: 'This erases all saved requests and items and restores the sample data. Continue?',
     confirmText: 'Reset',
     showCancel: true,
-    onConfirm: () => {
-      Store.reset();
+    onConfirm: async () => {
+      await Store.reset();
       closeModal();
       showToast('🔄 Data reset.');
       refreshAdminView();
@@ -463,7 +380,17 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal
 $('login-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 $('year').textContent = new Date().getFullYear();
 
+// Redraw whenever Firebase data (or login state) changes, on any device
+Store.onChange(refreshAdminView);
+
 refreshAll();
 setDateLimits();
 if (hasAcceptedTerms()) $('terms-overlay').classList.add('hidden'); else showTerms();
 
+// ─── Make functions available to inline onclick="" in the HTML ──
+Object.assign(window, {
+  showPage, showAdminPage, showLogin, doLogin, logout, showAdmin, showPublic,
+  addRequestShortcut, onTermsToggle, acceptTerms, submitRequest, viewDetail,
+  approveReq, rejectReq, markReturned, markLost, editItem, showAddItem,
+  resetData, handleIdUpload, updateQtyLimit, clampQty, syncReturnMin,
+});
