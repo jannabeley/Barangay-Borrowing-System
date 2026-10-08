@@ -6,6 +6,30 @@
 const PUBLIC_PAGES = ['home', 'borrow', 'login'];
 const ADMIN_PAGES = ['dashboard', 'a-pending', 'a-approved', 'a-rejected', 'a-returned', 'a-lost', 'a-inventory', 'a-reports'];
 
+// Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyCUJJRxAYfMZPNel5vcGlNUGVassrgXuXY",
+  authDomain: "barangayborrowingsystem-82048.firebaseapp.com",
+  databaseURL: "https://barangayborrowingsystem-82048-default-rtdb.firebaseio.com",
+  projectId: "barangayborrowingsystem-82048",
+  storageBucket: "barangayborrowingsystem-82048.firebasestorage.app",
+  messagingSenderId: "41992388816",
+  appId: "1:41992388816:web:9847dc4de4886876d61ed5",
+  measurementId: "G-2YFR9CMZJK"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
+
+
 // ─── TERMS & CONDITIONS ────────────────────────────────────────
 let termsOk = false; // fallback if sessionStorage is unavailable
 function hasAcceptedTerms() {
@@ -50,29 +74,6 @@ function showAdminPage(id) {
   else if (id === 'a-inventory') renderInventoryTable();
   else if (id === 'a-reports') renderReports();
 }
-
-// Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
-const firebaseConfig = {
-  apiKey: "AIzaSyCUJJRxAYfMZPNel5vcGlNUGVassrgXuXY",
-  authDomain: "barangayborrowingsystem-82048.firebaseapp.com",
-  databaseURL: "https://barangayborrowingsystem-82048-default-rtdb.firebaseio.com",
-  projectId: "barangayborrowingsystem-82048",
-  storageBucket: "barangayborrowingsystem-82048.firebasestorage.app",
-  messagingSenderId: "41992388816",
-  appId: "1:41992388816:web:9847dc4de4886876d61ed5",
-  measurementId: "G-2YFR9CMZJK"
-};
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
 
 // ─── ADMIN LOGIN ───────────────────────────────────────────────
 let loggedIn = false; // fallback if sessionStorage is unavailable
