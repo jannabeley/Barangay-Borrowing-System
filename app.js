@@ -3,9 +3,6 @@
  * Uses Store (data) and the render functions from ui.js.
  */
 
-const PUBLIC_PAGES = ['home', 'borrow', 'login'];
-const ADMIN_PAGES = ['dashboard', 'a-pending', 'a-approved', 'a-rejected', 'a-returned', 'a-lost', 'a-inventory', 'a-reports'];
-
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
@@ -28,6 +25,9 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
+
+const PUBLIC_PAGES = ['home', 'borrow', 'login'];
+const ADMIN_PAGES = ['dashboard', 'a-pending', 'a-approved', 'a-rejected', 'a-returned', 'a-lost', 'a-inventory', 'a-reports'];
 
 
 // ─── TERMS & CONDITIONS ────────────────────────────────────────
