@@ -3,11 +3,8 @@
  * Uses Store (data) and the render functions from ui.js.
  */
 
-// Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, onValue, set, update, remove } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 // Your web app's Firebase configuration
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
@@ -24,6 +21,58 @@ const firebaseConfig = {
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const Store = (() => {
+  const STATUS = { PENDING:'Pending', APPROVED:'Approved', REJECTED:'Rejected', RETURNED:'Returned', LOST:'Lost' };
+  let items = [];      // cache
+  let requests = [];   // cache
+
+  // Live sync: runs on first load AND whenever any device changes data
+  onValue(ref(db, 'items'), (snap) => {
+    items = Object.values(snap.val() || {});
+    refreshAdminView?.(); refreshAll();
+  });
+  onValue(ref(db, 'requests'), (snap) => {
+    requests = Object.values(snap.val() || {});
+    refreshAll();
+  });
+
+  const inUse = (name) => requests
+    .filter(r => r.item === name && r.status === STATUS.APPROVED)
+    .reduce((n, r) => n + r.qty, 0);
+
+  return {
+    STATUS,
+    getItems: () => items,
+    getItem: (name) => items.find(i => i.name === name),
+    getRequest: (id) => requests.find(r => r.id === id),
+    inUse,
+    available: (it) => it ? it.total - it.lost - inUse(it.name) : 0,
+
+    addRequest(data) {
+      const id = 'REQ-' + Date.now().toString(36).toUpperCase();
+      const req = { id, status: STATUS.PENDING, createdAt: new Date().toISOString(), ...data };
+      set(ref(db, 'requests/' + id), req);
+      requests.push(req);               // show instantly
+      return req;
+    },
+    setStatus(id, status, extra = {}) {
+      update(ref(db, 'requests/' + id), { status, ...extra });
+    },
+    addItem(name, total) {
+      set(ref(db, 'items/' + encodeURIComponent(name)), { name, total, lost: 0 });
+    },
+    updateItem(index, changes) {
+      const it = items[index];
+      update(ref(db, 'items/' + encodeURIComponent(it.name)), changes);
+    },
+    reset() { /* remove(ref(db,'requests')) and re-seed items if you want */ },
+    checkLogin: (u, p) => /* see note below */ false,
+  };
+})();
+
 const analytics = getAnalytics(app);
 
 const PUBLIC_PAGES = ['home', 'borrow', 'login'];
